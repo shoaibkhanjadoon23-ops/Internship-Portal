@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — Internship Portal</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Internship<span>Portal</span></div>
+  <div>
+    <a href="admin.html" class="btn secondary" style="margin-right:8px;">Admin console</a>
+    <button class="btn secondary" onclick="logout()">Sign out</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <section style="margin-bottom:36px;">
+    <div class="eyebrow">Courses</div>
+    <h2>Your learning path</h2>
+    <div id="coursesGrid" class="grid"><div class="empty-state">Loading courses…</div></div>
+  </section>
+
+  <section id="lessonsSection" style="display:none; margin-bottom:36px;">
+    <div class="eyebrow" id="activeCourseLabel">Lessons</div>
+    <h2 id="lessonsTitle">Lessons</h2>
+    <div id="lessonsGrid" class="grid"></div>
+  </section>
+
+  <section id="submitSection" style="display:none; margin-bottom:36px;">
+    <div class="eyebrow">Assignment</div>
+    <h2 id="submitLessonTitle">Submit your work</h2>
+    <video id="lessonVideo" controls style="display:none; margin-bottom:16px;"></video>
+    <label>Your submission</label>
+    <textarea id="submissionContent" placeholder="Write or paste your work here…"></textarea>
+    <button class="btn" onclick="submitWork()">Submit for AI grading</button>
+    <div id="submitResult" style="margin-top:14px;"></div>
+  </section>
+
+  <section style="margin-bottom:36px;">
+    <div class="eyebrow">Your history</div>
+    <h2>Past submissions</h2>
+    <div id="mySubmissions" class="empty-state">Loading…</div>
+  </section>
+
+  <section>
+    <div class="eyebrow">AI Mentor</div>
+    <h2>Ask your mentor</h2>
+    <div class="chat-panel">
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" placeholder="Ask about the lesson, your progress, anything…" onkeydown="if(event.key==='Enter') sendChat()">
+        <button class="btn" onclick="sendChat()">Send</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/supabaseClient.js"></script>
+<script src="js/api.js"></script>
+<script>
+let currentCourseId = null;
+let currentLessonId = null;
+
+(async () => {
+  await requireLogin();
+  loadCourses();
+  loadMySubmissions();
+  loadChatHistory();
+})();
+
+async function loadCourses() {
+  const grid = document.getElementById('coursesGrid');
+  try {
+    const courses = await api.listCourses();
+    if (!courses.length) {
+      grid.innerHTML = `<div class="empty-state">No courses published yet. Check back once your program admin adds one.</div>`;
+      return;
+    }
+    grid.innerHTML = courses.map(c => `
+      <div class="card">
+        <h3>${escapeHtml(c.title)}</h3>
+        <p style="color:var(--paper-dim); font-size:0.9rem;">${escapeHtml(c.description || '')}</p>
+        <button class="btn secondary" onclick="openCourse('${c.id}', '${escapeHtml(c.title)}')">View lessons</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    grid.innerHTML = `<div class="error-box">Couldn't load courses: ${e.message}</div>`;
+  }
+}
+
+async function openCourse(courseId, title) {
+  currentCourseId = courseId;
+  await api.enroll(courseId).catch(() => {}); // enroll if not already
+  document.getElementById('lessonsSection').style.display = 'block';
+  document.getElementById('lessonsTitle').textContent = title;
+  const grid = document.getElementById('lessonsGrid');
+  grid.innerHTML = `<div class="empty-state">Loading lessons…</div>`;
+  try {
+    const lessons = await api.listLessons(courseId);
+    if (!lessons.length) {
+      grid.innerHTML = `<div class="empty-state">No lessons ready yet for this course.</div>`;
+      return;
+    }
+    grid.innerHTML = lessons.map(l => `
+      <div class="card">
+        <h3>${escapeHtml(l.title)}</h3>
+        <span class="status-pill status-${l.status}">${l.status}</span>
+        <div style="margin-top:12px;">
+          <button class="btn secondary" ${l.status !== 'ready' ? 'disabled' : ''} onclick='openLesson(${JSON.stringify(l)})'>
+            ${l.status === 'ready' ? 'Open lesson' : 'Video not ready yet'}
+          </button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    grid.innerHTML = `<div class="error-box">Couldn't load lessons: ${e.message}</div>`;
+  }
+}
+
+function openLesson(lesson) {
+  currentLessonId = lesson.id;
+  document.getElementById('submitSection').style.display = 'block';
+  document.getElementById('submitLessonTitle').textContent = `Submit: ${lesson.title}`;
+  const video = document.getElementById('lessonVideo');
+  if (lesson.video_url) {
+    video.src = lesson.video_url;
+    video.style.display = 'block';
+  } else {
+    video.style.display = 'none';
+  }
+  document.getElementById('submitSection').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function submitWork() {
+  const content = document.getElementById('submissionContent').value.trim();
+  const resultBox = document.getElementById('submitResult');
+  if (!content || !currentLessonId) return;
+  resultBox.innerHTML = `<div class="empty-state">Grading with AI…</div>`;
+  try {
+    const submission = await api.submitWork(currentLessonId, content);
+    if (submission.status === 'graded') {
+      resultBox.innerHTML = `
+        <div class="card">
+          <strong>Score: ${submission.ai_score}/100</strong>
+          <p style="margin-top:8px;">${escapeHtml(submission.ai_feedback)}</p>
+        </div>`;
+    } else {
+      resultBox.innerHTML = `<div class="error-box">Submitted, but automatic grading couldn't complete right now. An instructor will review it manually.</div>`;
+    }
+    document.getElementById('submissionContent').value = '';
+    loadMySubmissions();
+  } catch (e) {
+    resultBox.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+async function loadMySubmissions() {
+  const box = document.getElementById('mySubmissions');
+  try {
+    const subs = await api.mySubmissions();
+    if (!subs.length) {
+      box.innerHTML = `<div class="empty-state">You haven't submitted anything yet.</div>`;
+      return;
+    }
+    box.className = '';
+    box.innerHTML = subs.map(s => `
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between;">
+          <strong>${escapeHtml(s.lessons?.title || 'Lesson')}</strong>
+          <span class="status-pill status-${s.status}">${s.status}</span>
+        </div>
+        ${s.ai_score != null ? `<p>Score: ${s.ai_score}/100 — ${escapeHtml(s.ai_feedback || '')}</p>` : ''}
+      </div>
+    `).join('');
+  } catch (e) {
+    box.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+async function loadChatHistory() {
+  const container = document.getElementById('chatMessages');
+  try {
+    const history = await api.mentorHistory();
+    container.innerHTML = history.map(renderChatMsg).join('');
+    container.scrollTop = container.scrollHeight;
+  } catch (e) {
+    container.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+function renderChatMsg(m) {
+  return `<div class="chat-msg ${m.role}">${escapeHtml(m.content)}</div>`;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  const container = document.getElementById('chatMessages');
+  container.insertAdjacentHTML('beforeend', renderChatMsg({ role: 'user', content: msg }));
+  input.value = '';
+  container.scrollTop = container.scrollHeight;
+  try {
+    const res = await api.mentorChat(msg);
+    container.insertAdjacentHTML('beforeend', renderChatMsg({ role: 'assistant', content: res.reply }));
+    container.scrollTop = container.scrollHeight;
+  } catch (e) {
+    container.insertAdjacentHTML('beforeend', `<div class="error-box">${e.message}</div>`);
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>

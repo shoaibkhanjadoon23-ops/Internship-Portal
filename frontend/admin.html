@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Console — Internship Portal</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Internship<span>Portal</span> <span style="color:var(--paper-dim); font-size:0.9rem; font-weight:400;">/ admin</span></div>
+  <div>
+    <a href="dashboard.html" class="btn secondary" style="margin-right:8px;">Student view</a>
+    <button class="btn secondary" onclick="logout()">Sign out</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <section style="margin-bottom:36px;">
+    <div class="eyebrow">Step 1</div>
+    <h2>Create a course</h2>
+    <div class="card" style="max-width:480px;">
+      <label>Title</label>
+      <input type="text" id="courseTitle">
+      <label>Description</label>
+      <textarea id="courseDescription"></textarea>
+      <button class="btn" onclick="createCourse()">Create course</button>
+    </div>
+  </section>
+
+  <section style="margin-bottom:36px;">
+    <div class="eyebrow">Step 2</div>
+    <h2>Write a lesson script</h2>
+    <div class="card" style="max-width:600px;">
+      <label>Course</label>
+      <select id="lessonCourseSelect"></select>
+      <label>Lesson title</label>
+      <input type="text" id="lessonTitle">
+      <label>Lesson script (this text becomes the narrated avatar video)</label>
+      <textarea id="lessonScript" style="min-height:160px;"></textarea>
+      <label>Presenter photo URL (optional — leave blank to use your default avatar)</label>
+      <input type="text" id="lessonAvatarUrl" placeholder="https://.../presenter.jpg">
+      <button class="btn" onclick="createLesson()">Save as draft</button>
+    </div>
+  </section>
+
+  <section style="margin-bottom:36px;">
+    <div class="eyebrow">Step 3</div>
+    <h2>Approve lessons for the next render batch</h2>
+    <div id="draftLessonsList" class="grid"><div class="empty-state">Select a course above to see its lessons.</div></div>
+  </section>
+
+  <section style="margin-bottom:36px;">
+    <div class="eyebrow">Render queue</div>
+    <h2>Batch render status <button class="btn secondary" style="font-size:0.75rem; padding:6px 10px;" onclick="loadJobs()">↻ refresh</button></h2>
+    <p style="color:var(--paper-dim); font-size:0.88rem; margin-top:-8px;">
+      This reflects your Colab/Kaggle notebook in real time — run the notebook to work through anything sitting at "queued".
+    </p>
+    <div id="jobQueueTicker" class="queue-ticker">Loading…</div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Submissions</div>
+    <h2>All student submissions</h2>
+    <div id="allSubmissions" class="empty-state">Loading…</div>
+  </section>
+
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/supabaseClient.js"></script>
+<script src="js/api.js"></script>
+<script>
+let coursesCache = [];
+
+(async () => {
+  await requireLogin();
+  await loadCoursesIntoSelect();
+  loadJobs();
+  loadAllSubmissions();
+})();
+
+async function loadCoursesIntoSelect() {
+  const select = document.getElementById('lessonCourseSelect');
+  try {
+    coursesCache = await api.listCourses();
+    if (!coursesCache.length) {
+      select.innerHTML = `<option value="">No courses yet — create one above</option>`;
+      return;
+    }
+    select.innerHTML = coursesCache.map(c => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('');
+    select.onchange = () => loadDraftLessons(select.value);
+    loadDraftLessons(select.value);
+  } catch (e) {
+    select.innerHTML = `<option value="">Error loading courses</option>`;
+  }
+}
+
+async function createCourse() {
+  const title = document.getElementById('courseTitle').value.trim();
+  const description = document.getElementById('courseDescription').value.trim();
+  if (!title) return;
+  try {
+    await api.createCourse({ title, description });
+    document.getElementById('courseTitle').value = '';
+    document.getElementById('courseDescription').value = '';
+    await loadCoursesIntoSelect();
+  } catch (e) {
+    alert(`Couldn't create course: ${e.message}`);
+  }
+}
+
+async function createLesson() {
+  const courseId = document.getElementById('lessonCourseSelect').value;
+  const title = document.getElementById('lessonTitle').value.trim();
+  const script = document.getElementById('lessonScript').value.trim();
+  const avatar_photo_url = document.getElementById('lessonAvatarUrl').value.trim() || null;
+  if (!courseId || !title || !script) return alert('Course, title, and script are all required.');
+  try {
+    await api.createLesson(courseId, { title, script, avatar_photo_url });
+    document.getElementById('lessonTitle').value = '';
+    document.getElementById('lessonScript').value = '';
+    document.getElementById('lessonAvatarUrl').value = '';
+    loadDraftLessons(courseId);
+  } catch (e) {
+    alert(`Couldn't save lesson: ${e.message}`);
+  }
+}
+
+async function loadDraftLessons(courseId) {
+  const grid = document.getElementById('draftLessonsList');
+  if (!courseId) { grid.innerHTML = `<div class="empty-state">Select a course above to see its lessons.</div>`; return; }
+  grid.innerHTML = `<div class="empty-state">Loading…</div>`;
+  try {
+    const lessons = await api.listLessons(courseId);
+    if (!lessons.length) {
+      grid.innerHTML = `<div class="empty-state">No lessons yet for this course.</div>`;
+      return;
+    }
+    grid.innerHTML = lessons.map(l => `
+      <div class="card">
+        <h3>${escapeHtml(l.title)}</h3>
+        <span class="status-pill status-${l.status}">${l.status}</span>
+        <div style="margin-top:12px;">
+          <button class="btn" ${l.status !== 'draft' ? 'disabled' : ''} onclick="approveLesson('${l.id}', '${courseId}')">
+            ${l.status === 'draft' ? 'Approve → queue for render' : 'Already queued/rendered'}
+          </button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    grid.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+async function approveLesson(lessonId, courseId) {
+  try {
+    await api.approveLesson(lessonId);
+    loadDraftLessons(courseId);
+    loadJobs();
+  } catch (e) {
+    alert(`Couldn't approve lesson: ${e.message}`);
+  }
+}
+
+async function loadJobs() {
+  const ticker = document.getElementById('jobQueueTicker');
+  try {
+    const jobs = await api.listJobs();
+    if (!jobs.length) {
+      ticker.innerHTML = `<div class="empty-state">No render jobs yet. Approve a lesson to queue one.</div>`;
+      return;
+    }
+    ticker.innerHTML = jobs.map(j => `
+      <div class="row">
+        <span class="lesson-name">${escapeHtml(j.lessons?.title || j.lesson_id)}</span>
+        <span class="status-pill status-${j.status}">${j.status}</span>
+        <span class="timestamp">${new Date(j.created_at).toLocaleString()}</span>
+      </div>
+    `).join('');
+  } catch (e) {
+    ticker.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+async function loadAllSubmissions() {
+  const box = document.getElementById('allSubmissions');
+  try {
+    const subs = await api.allSubmissions();
+    if (!subs.length) {
+      box.innerHTML = `<div class="empty-state">No submissions yet.</div>`;
+      return;
+    }
+    box.className = '';
+    box.innerHTML = subs.map(s => `
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between;">
+          <strong>${escapeHtml(s.profiles?.full_name || 'Student')} — ${escapeHtml(s.lessons?.title || 'Lesson')}</strong>
+          <span class="status-pill status-${s.status}">${s.status}</span>
+        </div>
+        ${s.ai_score != null ? `<p>AI score: ${s.ai_score}/100 (${s.ai_provider}) — ${escapeHtml(s.ai_feedback || '')}</p>` : ''}
+      </div>
+    `).join('');
+  } catch (e) {
+    box.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>

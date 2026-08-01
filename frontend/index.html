@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Internship Portal — Sign in</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div class="auth-shell">
+  <div class="eyebrow">Internship Portal</div>
+  <h1>Welcome<span style="color:var(--amber)">.</span></h1>
+
+  <div class="tabs">
+    <button id="tabLogin" class="active" onclick="switchTab('login')">Sign in</button>
+    <button id="tabSignup" onclick="switchTab('signup')">Create account</button>
+  </div>
+
+  <div id="errorBox" class="error-box" style="display:none;"></div>
+
+  <form id="loginForm" onsubmit="handleLogin(event)">
+    <label>Email</label>
+    <input type="email" id="loginEmail" required>
+    <label>Password</label>
+    <input type="password" id="loginPassword" required>
+    <button class="btn" style="width:100%;" type="submit">Sign in</button>
+  </form>
+
+  <form id="signupForm" onsubmit="handleSignup(event)" style="display:none;">
+    <label>Full name</label>
+    <input type="text" id="signupName" required>
+    <label>Email</label>
+    <input type="email" id="signupEmail" required>
+    <label>Password</label>
+    <input type="password" id="signupPassword" required minlength="6">
+    <button class="btn" style="width:100%;" type="submit">Create account</button>
+  </form>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/supabaseClient.js"></script>
+<script>
+function switchTab(which) {
+  document.getElementById('tabLogin').classList.toggle('active', which === 'login');
+  document.getElementById('tabSignup').classList.toggle('active', which === 'signup');
+  document.getElementById('loginForm').style.display = which === 'login' ? 'block' : 'none';
+  document.getElementById('signupForm').style.display = which === 'signup' ? 'block' : 'none';
+  hideError();
+}
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.textContent = msg;
+  box.style.display = 'block';
+}
+function hideError() { document.getElementById('errorBox').style.display = 'none'; }
+
+async function handleLogin(e) {
+  e.preventDefault();
+  hideError();
+  const email = document.getElementById('loginEmail').value;
+  const password = document.getElementById('loginPassword').value;
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) return showError(error.message);
+  window.location.href = "dashboard.html";
+}
+
+async function handleSignup(e) {
+  e.preventDefault();
+  hideError();
+  const full_name = document.getElementById('signupName').value;
+  const email = document.getElementById('signupEmail').value;
+  const password = document.getElementById('signupPassword').value;
+  const { error } = await supabaseClient.auth.signUp({
+    email, password,
+    options: { data: { full_name } }
+  });
+  if (error) return showError(error.message);
+  showError("Account created. Check your email to confirm, then sign in.");
+}
+
+// If already logged in, skip straight to dashboard
+(async () => {
+  const session = await getCurrentSession();
+  if (session) window.location.href = "dashboard.html";
+})();
+</script>
+</body>
+</html>
